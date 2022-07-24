@@ -1,0 +1,91 @@
+int NTC = A2; // Naming A2 pin to NTC
+double ntcinput, tempK, tempC, tempF;
+String str;
+
+extern volatile unsigned long timer0_millis; //타이머변수
+unsigned long timeVal = 0; //현재시간값 저장변수
+unsigned long previousVal = 0; //이전시간값 저장변수
+
+unsigned long delayms(unsigned long i)
+{
+  timeVal = millis();
+  if (timeVal - previousVal >= i)
+  {
+    previousVal = timeVal;
+  }
+}
+
+unsigned long timerreset()
+{
+  if (timeVal  >= 10000)
+  {
+    timer0_millis = 0;
+    previousVal = timeVal;
+  }
+}
+
+double tempeq(double ntcinput)
+{
+  double rTH = ((1024 / (ntcinput) - 1)) * 98500;     // Calculate the NTC's resistor from ntcinput value
+  double temp = (0.8270772421E-3) + (2.088058734E-4) * log(rTH) + (0.8058454462E-7) * pow(log(rTH), 3);    // Calculate the Kelvin temperature using rTH value
+  return temp;
+}
+
+String readSerial() // Declare read string function
+{
+  String str = "";
+  char ch;
+  while ( Serial.available() > 0 )
+  {
+    ch = Serial.read();
+    str.concat(ch);
+    delay(10);
+  }
+  return str;
+}
+
+void setup()
+{
+  Serial.begin(115200);
+  pinMode(NTC, INPUT); // Set NTC pin to INPUT
+}
+
+
+void loop()
+{
+  tempK = 1 / tempeq(analogRead(NTC));
+  tempC = tempK - (273.15);     // Convert Kelvin to Celsius
+  tempF = tempC * 1.8 + 32;
+  str = readSerial();     // read serial input
+
+  if (str == "")
+  {
+  }
+  else if (str == "1")
+  {
+    Serial.println(ntcinput);
+    Serial.println("현재 온도 : ");
+    Serial.print(tempK);
+    Serial.println("K");
+    Serial.print(tempC);
+    Serial.println("℃");
+    Serial.print(tempF);
+    Serial.println("℉\n");
+  }
+  else
+  {
+    Serial.println("잘못된 입력입니다.");
+  }
+
+  if (tempC > 80)
+  {
+    Serial.println("경고!");
+    delayms(500);
+  }
+  else
+  {
+    delayms(500);
+  }
+  delayms(100);
+  timerreset();
+}
