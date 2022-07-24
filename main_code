@@ -1,0 +1,575 @@
+#include <Nextion.h> //Nextion 라이브러리
+#include <EEPROM.h> //EEPROM 라이브러리
+#include <Wire.h> // I2C 라이브러리
+
+#include <Wire.h>
+#include <Adafruit_VEML7700.h>
+#include <SHT3x.h>
+#include <LM75A.h> //I2C 기반 센서류 라이브러리
+
+// Create I2C LM75A instance
+LM75A lm75a_sensor(false, false, false); // LM75A 라이브러리 호출용 인스턴스를 lm75a_sensor로 설정 및 I2C 어드레스 지정
+Adafruit_VEML7700 veml; // VEML7700 라이브러리 호출 인스턴스를 veml으로 설정
+SHT3x sht31; // SHT3x 라이브러리 호출 인스턴스를 sht31으로 설정
+
+//===================================시간 측정용 변수===================================
+unsigned long previous_Update = 0;
+unsigned long current_LED = 0;
+unsigned long current = 0;
+//===================================================================================
+
+//===================================센서 측정값용 변수==================================
+float tempCels = 0; // 전역변수 온도(섭씨)
+float tempFahr = 0; // 전역변수 온도(화씨)
+float humiReal = 0; // 전역변수 상대습도
+float humiAbso = 0; // 전역변수 절대습도
+double lux = 0; // 전역변수 광량
+//===================================================================================
+
+//===================================설정값 수신용 변수==================================
+String inData;                      // 수신 문자
+int inByte = 0;                      // 수신 바이트
+byte endBytes = 0;               // 종료 바이트 갯수 (3개)
+uint32_t inNumber = 0;                 // 수신 숫자 (수신 문자를 숫자로 변환한 값)
+short endfunction = 0;
+//====================================================================================
+
+//===================================설정값 저장용 전역변수===============================
+byte tempo_hu = 0;        // 습도
+byte tempo_tp = 0;        // 온도
+int32_t tempo_lx = 0;    // 조도
+//====================================================================================
+
+//===================================장비 조작용 변수===================================
+boolean LED_A = LOW;
+boolean LED_B = HIGH;
+boolean motor1 = LOW;
+boolean motor2 = LOW;
+boolean atomizer = LOW;
+//====================================================================================
+
+//===================================스텝모터용 변수 선언=================================
+int Steps = 0;
+boolean Direction = true;
+unsigned long last_time;
+unsigned long currentMillis ;
+int steps_left = 4095;
+long time;
+int motorspeed = 2000;
+//====================================================================================
+
+//===================================장비 신호단자 지정===================================
+const int LED_out = 8;
+const int motor_out1 = 10;
+const int motor_out2 = 16;
+const int motor_out3 = 14;
+const int motor_out4 = 15;
+const int atomizer_out = 9;
+//====================================================================================
+
+//Nextion 화면구성 객체 선언 [ Ex. NexText(page id = 0, component id = 1, component name = "btnP0") ]
+//화면터치등으로 아두이노로 신호를 내보내는 객체 혹은 아두이노에서 받은 신호로 객체상태를 변경해야 하는요소 들
+//Nextion Editor의 속성에서 객체 id와 이름을 확인
+//=======================================info_1========================================
+NexText variTempC = NexText(0, 7, "variTempC");       // 섭씨온도를 표시할 텍스트
+NexText variHumiRe = NexText(0, 8, "variHumiRe");       // 상대습도를 표시할 텍스트
+NexText variIllu = NexText(0, 9, "variIllu");       // 조도를 표시할 텍스트
+//=====================================================================================
+
+//=======================================info_2========================================
+NexText variTempF = NexText(1, 7, "variTempF");       // 화씨온도를 표시할 텍스트
+NexText variHumiAb = NexText(1, 8, "variHumiAb");       // 절대습도를 표시할 텍스트
+NexText variIllu2 = NexText(1, 9, "variIllu");
+//=====================================================================================
+
+//=======================================setting_humi==================================
+NexText setHumi = NexText(2, 7, "setHumi");       // 습도에 따른 분무 동작값 표시
+//=====================================================================================
+
+//=======================================setting_temp==================================
+NexText setTemp = NexText(3, 8, "setTemp");       // 온도에 따른 셔터 동작값 표시
+//=====================================================================================
+
+//=======================================setting_illu==================================
+NexText setIllu = NexText(4, 7, "setIllu");       // 조도에 따른 LED 동작값 표시
+//=====================================================================================
+
+
+//=======================================set_humi_val==================================
+NexText set_humi = NexText(5, 8, "set_humi");           // 설정할 습도값 표시
+NexButton btn_back_h = NexButton(5, 1, "btn_back_h");   // 습도 돌아가기 버튼
+NexButton btn_save_h = NexButton(5, 7, "btn_save_h");   // 습도 저장버튼(EEPROM에 저장)
+//=====================================================================================
+
+//=======================================set_temp_val==================================
+NexText set_temp = NexText(6, 8, "set_temp");           // 설정할 온도값 표시
+NexButton btn_back_t = NexButton(6, 1, "btn_back_t");   // 온도 돌아가기버튼
+NexButton btn_save_t = NexButton(6, 7, "btn_save_t");   // 온도 저장버튼
+//=====================================================================================
+
+//=======================================set_illu_val==================================
+NexText set_illu = NexText(7, 11, "set_illu");           // 설정할 조도값 표시
+NexButton btn_back_i = NexButton(7, 1, "btn_back_i");   // 조도 돌아가기버튼
+NexButton btn_save_i = NexButton(7, 9, "btn_save_i");   // 조도 저장버튼
+//=====================================================================================
+
+
+// Nextion 객체중 터치이벤트를 발생시키는 객체는 터치이벤트 리스트에 등록
+NexTouch *nex_event_list[] =
+{
+  &btn_back_h,
+  &btn_back_t,
+  &btn_back_i,
+  &btn_save_h,
+  &btn_save_t,
+  &btn_save_i,
+  NULL
+};
+
+
+void weatherUpate() // 기상값 자동 업데이트 함수
+{
+  tempCels = lm75a_sensor.getTemperatureInDegrees();       //LM75A 온도 섭씨 측정
+  tempFahr = lm75a_sensor.degreesToFahrenheit(tempCels);   //LM75A 온도 화씨 측정
+  lux = veml.readLux();                                    // VEML7700 광량측정부
+  sht31.UpdateData();                                      // STH31 습도측정부
+  humiReal = sht31.GetRelHumidity();
+  humiAbso = sht31.GetAbsHumidity();
+
+  if (isnan(tempCels) || isnan(humiReal) || isnan(lux))   // 온도/습도 변수에 측정값이 없을 경우 함수종료
+  {
+    return;
+  }
+  else
+  {
+    static char realnum[6];                 // 실수값 문자열을 저장할 임시변수 선언
+    dtostrf(tempCels, 6, 2, realnum);       // 섭씨 실수값을 문자열로 변환 - dtostrf(변환할실수, 부호;소수점포함 전체자리수, 소수점자리수, 문자버퍼)
+    variTempC.setText(realnum);             // 섭씨 온도값을 Nextion에 표시
+
+    dtostrf(tempFahr, 6, 2, realnum);       // 화씨 실수값을 문자열로 변환 - dtostrf(변환할실수, 부호;소수점포함 전체자리수, 소수점자리수, 문자버퍼)
+    variTempF.setText(realnum);             // 화씨 온도값을 Nextion에 표시
+
+    static char integ[10] = { 0 };          // 정수값 문자열을 저장할 변수 선언
+    utoa(int(humiReal), integ, 10);         // 상대습도 정수값을 문자열로 변환
+    variHumiRe.setText(integ);              // 상대습도값을 Nextion에 표시
+
+    utoa(int(humiAbso), integ, 10);         // 절대습도 정수값을 문자열로 변환
+    variHumiAb.setText(integ);              // 절대습도값을 Nextion에 표시
+
+    ultoa(uint32_t(lux), integ, 10);        // 조도 정수값을 문자열로 변환
+    variIllu.setText(integ);                //조도값을 Nextion에 표시
+  }
+}
+
+void load_setting()   // 설정값 업데이트
+{
+  if (isnan(tempo_tp) || isnan(tempo_hu) || isnan(tempo_lx)) // 온도/습도 변수에 측정값이 없을 경우 함수종료
+  {
+    return;
+  }
+  else
+  {
+    tempo_tp = EEPROM.read(10);
+    tempo_hu = EEPROM.read(0);
+    EEPROM.get(20, tempo_lx);
+    char tempString[10];                        // 문자열을 저장할 임시변수 선언
+    utoa(byte(tempo_tp), tempString, 10);       // 실수를 문자열로 변환 - dtostrf(변환할실수, 부호;소수점포함 전체자리수, 소수점자리수, 문자버퍼)
+    setTemp.setText(tempString);                // 온도값을 Nextion에 표시
+
+    utoa(byte(tempo_hu), tempString, 10);       // 정수값을 문자열로 변환
+    setHumi.setText(tempString);                // 습도값을 Nextion에 표시
+
+    ultoa(uint32_t(tempo_lx), tempString, 10);  // 정수값을 문자열로 변환
+    setIllu.setText(tempString);                // 습도값을 Nextion에 표시
+  }
+}
+
+
+void btn_save_h_Callback(void *ptr) // 습도 저장버튼
+{
+  endfunction = 1;
+  while (endfunction)
+  {
+    if (Serial1.available())
+    {
+      inByte = Serial1.read();
+      if (inByte > 47 && inByte < 58) // 수신 바이트가 숫자이면
+      {
+        inData.concat(char(inByte));          // 10 진수를 문자로 변환하고 메시지에 추가
+      }
+      else if (inByte == 255) // 수신 바이트가 끝 바이트이면
+      {
+        endBytes += 1;             // 종료 바이트 계산
+      }
+
+      if (inByte == 255 && endBytes >= 3)// 끝 바이트가 3개 수신되면
+      {
+        inNumber = inData.toInt();
+        EEPROM.update(0, inNumber);
+        inData = "";
+        endBytes = 0;
+        endfunction = 0;
+      }
+    }
+  }
+}
+
+void btn_save_t_Callback(void *ptr) // 온도 저장버튼
+{
+  endfunction = 1;
+  while (endfunction)
+  {
+    if (Serial1.available())
+    {
+      inByte = Serial1.read();
+      if (inByte > 47 && inByte < 58) // 수신 바이트가 숫자이면
+      {
+        inData.concat(char(inByte));          // 10 진수를 문자로 변환하고 메시지에 추가
+      }
+      else if (inByte == 255) // 수신 바이트가 끝 바이트이면
+      {
+        endBytes += 1;             // 종료 바이트 계산
+      }
+
+      if (inByte == 255 && endBytes >= 3)// 끝 바이트가 3개 수신되면
+      {
+        inNumber = inData.toInt();
+        EEPROM.update(10, inNumber);
+        inData = "";
+        endBytes = 0;
+        endfunction = 0;
+      }
+    }
+  }
+}
+
+void btn_save_i_Callback(void *ptr) // 조도 저장버튼
+{
+  endfunction = 1;
+  while (endfunction)
+  {
+    if (Serial1.available())
+    {
+      inByte = Serial1.read();
+      if (inByte > 47 && inByte < 58) // 수신 바이트가 숫자이면
+      {
+        inData.concat(char(inByte));          // 10 진수를 문자로 변환하고 메시지에 추가
+      }
+      else if (inByte == 255) // 수신 바이트가 끝 바이트이면
+      {
+        endBytes += 1;             // 종료 바이트 계산
+      }
+
+      if (inByte == 255 && endBytes >= 3)// 끝 바이트가 3개 수신되면
+      {
+        inNumber = inData.toInt();
+        EEPROM.put(20, inNumber);
+        inData = "";
+        endBytes = 0;
+        endfunction = 0;
+      }
+    }
+  }
+}
+
+void illumination_check() // 조명조건 체크 및 저장함수
+{
+  if (lux < (tempo_lx + 100))
+  {
+    LED_A = HIGH;
+    EEPROM.write(30, LED_A);
+  }
+  else if (lux > (tempo_lx - 100))
+  {
+    LED_A = LOW;
+    EEPROM.write(30, LED_A);
+  }
+}
+
+int LED_control(boolean LED_A, boolean LED_B) // 조명조건을 이용해 실제 장비를 동작시킬 함수
+{
+  switch (LED_A)
+  {
+    case HIGH :
+      switch (LED_B)
+      {
+        case HIGH :
+          digitalWrite(LED_out, LOW);
+          break;
+        case LOW :
+          digitalWrite(LED_out, HIGH);
+      }
+      break;
+    case LOW :
+      digitalWrite(LED_out, LOW);
+      break;
+  }
+}
+
+void temperature_check() // 기온조건 체크 및 저장함수
+{
+  if (tempCels < (tempo_tp + 1))
+  {
+    motor1 = HIGH;
+    EEPROM.write(31, motor1);
+  }
+  else if (tempCels > (tempo_tp - 1))
+  {
+    motor1 = LOW;
+    EEPROM.write(31, motor1);
+  }
+}
+
+void SetDirection()
+{
+  if (Direction == 1)
+  {
+    Steps++;
+  }
+  if (Direction == 0)
+  {
+    Steps--;
+  }
+  if (Steps > 7)
+  {
+    Steps = 0;
+  }
+  if (Steps < 0)
+  {
+    Steps = 7;
+  }
+}
+
+void Alloff()
+{
+  digitalWrite(motor_out1, LOW);   //blue
+  digitalWrite(motor_out2, LOW);   //pink
+  digitalWrite(motor_out3, LOW);   //yello
+  digitalWrite(motor_out4, LOW);  //orange
+}
+
+void stepper(int xw)
+{
+  for (int x = 0; x < xw; x++)
+  {
+    switch (Steps)
+    {
+      case 0:
+        digitalWrite(motor_out1, LOW);   //blue
+        digitalWrite(motor_out2, LOW);   //pink
+        digitalWrite(motor_out3, LOW);   //yello
+        digitalWrite(motor_out4, HIGH);  //orange
+        break;
+      case 1:
+        digitalWrite(motor_out1, LOW);
+        digitalWrite(motor_out2, LOW);
+        digitalWrite(motor_out3, HIGH);
+        digitalWrite(motor_out4, HIGH);
+        break;
+      case 2:
+        digitalWrite(motor_out1, LOW);
+        digitalWrite(motor_out2, LOW);
+        digitalWrite(motor_out3, HIGH);
+        digitalWrite(motor_out4, LOW);
+        break;
+      case 3:
+        digitalWrite(motor_out1, LOW);
+        digitalWrite(motor_out2, HIGH);
+        digitalWrite(motor_out3, HIGH);
+        digitalWrite(motor_out4, LOW);
+        break;
+      case 4:
+        digitalWrite(motor_out1, LOW);
+        digitalWrite(motor_out2, HIGH);
+        digitalWrite(motor_out3, LOW);
+        digitalWrite(motor_out4, LOW);
+        break;
+      case 5:
+        digitalWrite(motor_out1, HIGH);
+        digitalWrite(motor_out2, HIGH);
+        digitalWrite(motor_out3, LOW);
+        digitalWrite(motor_out4, LOW);
+        break;
+      case 6:
+        digitalWrite(motor_out1, HIGH);
+        digitalWrite(motor_out2, LOW);
+        digitalWrite(motor_out3, LOW);
+        digitalWrite(motor_out4, LOW);
+        break;
+      case 7:
+        digitalWrite(motor_out1, HIGH);
+        digitalWrite(motor_out2, LOW);
+        digitalWrite(motor_out3, LOW);
+        digitalWrite(motor_out4, HIGH);
+        break;
+      default:
+        digitalWrite(motor_out1, LOW);
+        digitalWrite(motor_out2, LOW);
+        digitalWrite(motor_out3, LOW);
+        digitalWrite(motor_out4, LOW);
+        break;
+    }
+    SetDirection();
+  }
+}
+
+int stepper_motor_control(boolean A, boolean B)
+{
+  switch (A == B)
+  {
+    case HIGH :
+      break;
+    case LOW :
+      if (A < B)
+      {
+        Direction = false;                             // 모터방향
+        for (int s = 0; s < 2; s++)                   // 셔터 올림
+        {
+          while (steps_left > 0)
+          {
+            currentMillis = micros();
+            if (currentMillis - last_time >= motorspeed)
+            {
+              stepper(1);
+              time = time + micros() - last_time;
+              last_time = micros();
+              steps_left--;
+            }
+          }
+          Alloff();
+          steps_left = 4095;
+        }
+        motor2 = LOW;
+        EEPROM.write(32, motor2);
+      }
+      else if (A > B)
+      {
+        Direction = true;                             // 모터방향
+        for (int s = 0; s < 2; s++)                   // 셔터 내림
+        {
+          while (steps_left > 0)
+          {
+            currentMillis = micros();
+            if (currentMillis - last_time >= motorspeed)
+            {
+              stepper(1);
+              time = time + micros() - last_time;
+              last_time = micros();
+              steps_left--;
+            }
+          }
+          Alloff();
+          steps_left = 4095;
+        }
+        motor2 = HIGH;
+        EEPROM.write(32, motor2);
+        
+        break;
+      }
+  }
+}
+
+void humidity_check()
+{
+  {
+    if (humiReal < (tempo_hu + 3))
+    {
+      atomizer = HIGH;
+      EEPROM.write(33, atomizer);
+    }
+    else if (humiReal > (tempo_hu - 3))
+    {
+      atomizer = LOW;
+      EEPROM.write(33, atomizer);
+    }
+  }
+}
+
+int atomizer_motor_control(boolean k)
+{
+  switch (k)
+  {
+    case HIGH :
+      digitalWrite(atomizer_out, HIGH);
+      break;
+    case LOW :
+      digitalWrite(atomizer_out, LOW);
+      break;
+  }
+}
+
+
+void setup()
+{
+  Serial.begin(115200);
+  Serial1.begin(115200);
+  Wire.begin(); // I2C 통신 마스터 개시
+  nexInit();
+
+  veml.begin(); //veml 개시
+  // veml센서 기본세팅
+  veml.setGain(VEML7700_GAIN_1_8); //게인 보정값을 1/8로 설정 (1로할 시 고휘도 환경 아래에서 비선형값을 보임)
+  veml.setIntegrationTime(VEML7700_IT_25MS); // 합산간격값 간격을 25ms로 설정(상동)
+  veml.setLowThreshold(10000);
+  veml.setHighThreshold(20000);
+  veml.interruptEnable(true);
+
+  tempo_hu = EEPROM.read(0); //EEPROM에 저장된 값을 불러옴
+  tempo_tp = EEPROM.read(10);
+  EEPROM.get(20, tempo_lx);
+  LED_A = EEPROM.read(30);
+  motor1 = EEPROM.read(31);
+  motor2 = EEPROM.read(32);
+  atomizer = EEPROM.read(33);
+
+  //버튼 - 함수 연결세팅
+  btn_save_h.attachPush(btn_save_h_Callback, &btn_save_t);    //습도설정 저장버튼과 함수 연결
+  btn_save_t.attachPush(btn_save_t_Callback, &btn_save_t);    //온도설정 저장버튼과 함수 연결
+  btn_save_i.attachPush(btn_save_i_Callback, &btn_save_t);    //조도설정 저장버튼과 함수 연결
+
+  pinMode(LED_out, OUTPUT);
+  pinMode(atomizer_out, OUTPUT);
+  pinMode(motor_out1, OUTPUT);
+  pinMode(motor_out2, OUTPUT);
+  pinMode(motor_out3, OUTPUT);
+  pinMode(motor_out4, OUTPUT);
+}
+
+
+void loop()
+{
+  current = millis();
+  current_LED = millis();
+  if (current >= 86400000)
+  {
+    current = 0;
+  }
+  if (current_LED >= 10000) // 14400000 = 4시간
+  {
+    LED_B = HIGH;
+    if (LED_A == LOW)
+    {
+      current_LED = 0;
+      LED_B = LOW;
+    }
+  }
+  else
+  {
+    LED_B = LOW;
+  }
+
+  if (current - previous_Update >= 3000)
+  {
+    previous_Update = current;
+    weatherUpate();
+    load_setting();
+    illumination_check();
+    temperature_check();
+    humidity_check();
+    LED_control(LED_A, LED_B);
+    stepper_motor_control(motor1, motor2);
+    atomizer_motor_control(atomizer);
+  }
+
+  nexLoop(nex_event_list); //Nextion에서 발생하는 이벤트를 라이브러리로 전달
+}
